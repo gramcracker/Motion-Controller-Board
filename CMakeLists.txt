@@ -44,14 +44,13 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths
 )
 
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -u _printf_float)
+
 # Add sources to executable
+file(GLOB APP_SOURCES ${CMAKE_SOURCE_DIR}/Core/Src/*.cpp)
+
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user sources here
-    Core/Src/app_main.cpp
-    Core/Src/status_codes.cpp
-    Core/Src/drivetrain.cpp
-    Core/Src/ir_array.cpp
-    Core/Src/imu.cpp
+    ${APP_SOURCES}
 )
 
 target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE

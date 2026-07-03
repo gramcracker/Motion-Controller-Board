@@ -1,91 +1,188 @@
-// components/ir_array.cpp
-#include "ir_array.hpp"
+#include "ir_array_globals.h"
+#include "ir_array.h"
+#include "adc_util.h"
+#include "globals.h"
+#include "logger.h"
+#include "debug_io.h"
 #include "stm32f4xx_hal.h"
+#include <cstdio>
 
-static inline void usDelay(uint32_t us) {
-    // Coarse busy-wait; fine for a ~50us emitter settle. Replace with a DWT
-    // delay if you want precision.
-    uint32_t n = us * (SystemCoreClock / 1000000U) / 4U;
-    while (n--) __NOP();
-}
+static bool busyDelayUs(uint32_t microseconds)
+{
+    uint32_t cycles = microseconds * (SystemCoreClock / 1000000U) / 4U;
 
-void IrArray::init() {
-    for (uint8_t i = 0; i < CFG_IR_PAIR_COUNT; ++i) emitter(i, false);
-}
-
-// On-demand single-channel conversion (ADC1 shared across many sensors).
-uint16_t IrArray::adcRead(uint32_t channel) {
-    ADC_ChannelConfTypeDef cfg {};
-    cfg.Channel = channel;
-    cfg.Rank = 1;
-    cfg.SamplingTime = ADC_SAMPLETIME_84CYCLES;   // high-Z source
-    HAL_ADC_ConfigChannel(pins::ADC, &cfg);
-    HAL_ADC_Start(pins::ADC);
-    uint16_t v = 0;
-    if (HAL_ADC_PollForConversion(pins::ADC, 5) == HAL_OK)
-        v = (uint16_t)HAL_ADC_GetValue(pins::ADC);
-    HAL_ADC_Stop(pins::ADC);
-    return v;
-}
-
-uint16_t IrArray::readReceiver(uint8_t pair) {
-    return adcRead(pins::IR_RX_CH[pair]);
-}
-
-void IrArray::emitter(uint8_t pair, bool on) {
-    const GpioPin& p = pins::IR_TX[pair];
-    HAL_GPIO_WritePin(p.port, p.pin, on ? GPIO_PIN_SET : GPIO_PIN_RESET);
-}
-
-uint16_t IrArray::readAmbient(uint8_t pair) {
-    emitter(pair, false);
-    usDelay(pins::IR_SETTLE_US);
-    return readReceiver(pair);
-}
-
-uint16_t IrArray::readLit(uint8_t pair) {
-    emitter(pair, true);
-    usDelay(pins::IR_SETTLE_US);
-    uint16_t v = readReceiver(pair);
-    emitter(pair, false);
-    return v;
-}
-
-StatusCode IrArray::selftestPassive() {
-    StatusCode acc = OK(THIS_BOARD, Component::IrPair);
-
-    for (uint8_t i = 0; i < CFG_IR_PAIR_COUNT; ++i) {
-        // 1) Presence/plausibility from ambient -- runs regardless of emitters.
-        uint16_t amb = readAmbient(i);
-        if (amb <= pins::IR_AMBIENT_MIN)
-            return StatusCode(THIS_BOARD, Component::IrReceiver, i, Fault::StuckLow);
-        if (amb >= pins::IR_AMBIENT_MAX)
-            return StatusCode(THIS_BOARD, Component::IrReceiver, i, Fault::StuckHigh);
-
-#if CFG_ENABLE_IR && CFG_IR_EMITTERS_ENABLED && CFG_IR_HAS_RESISTORS
-        // 2) Lit delta -- only when it is safe to fire the emitter.
-        uint16_t lit = readLit(i);
-        int diff = (int)lit - (int)amb;
-        if (diff < (int)pins::IR_DELTA_MIN)
-            worst(acc, StatusCode(THIS_BOARD, Component::IrPair, i, Fault::NoChange));
-
-        // 3) Cross-pair isolation: fire pair i, neighbours must stay near ambient.
-        emitter(i, true);
-        usDelay(pins::IR_SETTLE_US);
-        for (uint8_t j = 0; j < CFG_IR_PAIR_COUNT; ++j) {
-            if (j == i) continue;
-            uint16_t ja = readAmbient(j);     // (emitter j off) baseline
-            // crude: compare receiver j now (i lit) vs its own ambient
-            uint16_t jn = readReceiver(j);
-            if ((int)jn - (int)ja > (int)pins::IR_DELTA_MIN)
-                worst(acc, StatusCode(THIS_BOARD, Component::IrPair, j,
-                                      Fault::Crosstalk));
-        }
-        emitter(i, false);
-#else
-        // Emitters disabled or no resistors yet: ambient-only, presence proven.
-        worst(acc, StatusCode(THIS_BOARD, Component::IrEmitter, i, Fault::NotTested));
-#endif
+    while (cycles > 0)
+    {
+        cycles = cycles - 1;
+        __NOP();
     }
-    return acc;
+
+    return true;
+}
+
+bool IrArray::initialize()
+{
+    uint8_t pair = 0;
+
+    for (pair = 0; pair < IR_PAIR_COUNT; pair++)
+    {
+        setEmitter(pair, false);
+    }
+
+    return true;
+}
+
+const char *IrArray::getName()
+{
+    return "IrArray";
+}
+
+ComponentId IrArray::getComponent()
+{
+    return ComponentId::IR_PAIR;
+}
+
+bool IrArray::setEmitter(uint8_t pair, bool on)
+{
+    if (pair >= IR_PAIR_COUNT)
+    {
+        return false;
+    }
+
+    GPIO_PinState state = GPIO_PIN_RESET;
+
+    if (on == true)
+    {
+        state = GPIO_PIN_SET;
+    }
+
+    HAL_GPIO_WritePin(IR_EMITTER_PINS[pair].p_port, IR_EMITTER_PINS[pair].pin, state);
+
+    return true;
+}
+
+bool IrArray::readAmbient(uint8_t pair, uint16_t &out_value)
+{
+    if (pair >= IR_PAIR_COUNT)
+    {
+        return false;
+    }
+
+    setEmitter(pair, false);
+    busyDelayUs(IR_SETTLE_US);
+
+    return adcReadChannel(IR_RECEIVER_CHANNELS[pair], IR_SAMPLE_TIME, out_value);
+}
+
+bool IrArray::readLit(uint8_t pair, uint16_t &out_value)
+{
+    if (pair >= IR_PAIR_COUNT)
+    {
+        return false;
+    }
+
+    setEmitter(pair, true);
+    busyDelayUs(IR_SETTLE_US);
+    bool ok = adcReadChannel(IR_RECEIVER_CHANNELS[pair], IR_SAMPLE_TIME, out_value);
+    setEmitter(pair, false);
+
+    return ok;
+}
+
+bool IrArray::checkPair(uint8_t pair, StatusCode &out_status)
+{
+    uint16_t ambient = 0;
+    uint16_t lit     = 0;
+
+    if (readAmbient(pair, ambient) == false)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IR_RECEIVER, pair, Fault::NO_RESPONSE);
+        return false;
+    }
+
+    if (ambient <= IR_AMBIENT_MIN)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IR_RECEIVER, pair, Fault::STUCK_LOW);
+        return false;
+    }
+
+    if (ambient >= IR_AMBIENT_MAX)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IR_RECEIVER, pair, Fault::STUCK_HIGH);
+        return false;
+    }
+
+    if (IR_EMITTERS_ENABLED == 0)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IR_EMITTER, pair, Fault::NOT_TESTED);
+        return false;
+    }
+
+    if (IR_HAS_RESISTORS == 0)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IR_EMITTER, pair, Fault::NOT_TESTED);
+        return false;
+    }
+
+    if (readLit(pair, lit) == false)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IR_RECEIVER, pair, Fault::NO_RESPONSE);
+        return false;
+    }
+
+    gLogger.info("IrArray pair:%u ambient:%u lit:%u", pair, ambient, lit);
+
+    if (int(lit) - int(ambient) < IR_DELTA_MIN)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IR_PAIR, pair, Fault::NO_CHANGE);
+        return false;
+    }
+
+    out_status = makeOk(gThisBoard, ComponentId::IR_PAIR, pair);
+
+    return true;
+}
+
+bool IrArray::runPassiveTest(StatusCode &out_status)
+{
+    uint8_t    pair = 0;
+    StatusCode result;
+    StatusCode worst = makeOk(gThisBoard, ComponentId::IR_PAIR, 0);
+
+    for (pair = 0; pair < IR_PAIR_COUNT; pair++)
+    {
+        checkPair(pair, result);
+        combineWorst(worst, result);
+    }
+
+    out_status = worst;
+
+    return worst.isOk();
+}
+
+bool IrArray::runInteractiveTest(StatusCode &out_status)
+{
+    uint8_t    pair = 0;
+    char       message[48] = {0};
+    StatusCode result;
+    StatusCode worst = makeOk(gThisBoard, ComponentId::IR_PAIR, 0);
+
+    if (gDebugBuild == false)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IR_PAIR, 0, Fault::NOT_TESTED);
+        return false;
+    }
+
+    for (pair = 0; pair < IR_PAIR_COUNT; pair++)
+    {
+        snprintf(message, sizeof(message), "Next: IR pair %u, place a surface in front", pair);
+        debugPrompt(message);
+
+        checkPair(pair, result);
+        combineWorst(worst, result);
+    }
+
+    out_status = worst;
+
+    return worst.isOk();
 }

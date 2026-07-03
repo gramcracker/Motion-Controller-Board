@@ -1,133 +1,343 @@
-// components/imu.cpp
-#include "imu.hpp"
+#include "imu_globals.h"
+#include "imu.h"
+#include "pins.h"
+#include "globals.h"
+#include "logger.h"
+#include "debug_io.h"
 #include "stm32f4xx_hal.h"
 #include <cmath>
+#include <cstdio>
 
-namespace { // MPU6500 registers
-    constexpr uint8_t REG_SMPLRT_DIV   = 0x19;
-    constexpr uint8_t REG_GYRO_CONFIG  = 0x1B;
-    constexpr uint8_t REG_ACCEL_CONFIG = 0x1C;
-    constexpr uint8_t REG_ACCEL_XOUT_H = 0x3B;
-    constexpr uint8_t REG_TEMP_OUT_H   = 0x41;
-    constexpr uint8_t REG_GYRO_XOUT_H  = 0x43;
-    constexpr uint8_t REG_PWR_MGMT_1   = 0x6B;
-    constexpr uint8_t REG_WHO_AM_I     = 0x75;
-    constexpr uint8_t READ = 0x80;
+static bool setChipSelect(bool selected)
+{
+    GPIO_PinState state = GPIO_PIN_SET;
+
+    if (selected == true)
+    {
+        state = GPIO_PIN_RESET;
+    }
+
+    HAL_GPIO_WritePin(Pins::IMU_CS.p_port, Pins::IMU_CS.pin, state);
+
+    return true;
 }
 
-static inline void cs(bool low) {
-    HAL_GPIO_WritePin(pins::IMU_CS.port, pins::IMU_CS.pin,
-                      low ? GPIO_PIN_RESET : GPIO_PIN_SET);
+bool Imu::readRegister(uint8_t reg, uint8_t &out_value)
+{
+    uint8_t tx[2] = { uint8_t(reg | MPU_READ_FLAG), 0x00 };
+    uint8_t rx[2] = { 0x00, 0x00 };
+
+    setChipSelect(true);
+    HAL_StatusTypeDef hal = HAL_SPI_TransmitReceive(Pins::IMU_SPI, tx, rx, 2, 10);
+    setChipSelect(false);
+
+    if (hal != HAL_OK)
+    {
+        return false;
+    }
+
+    out_value = rx[1];
+
+    return true;
 }
 
-uint8_t Imu::rd(uint8_t reg) {
-    uint8_t tx[2] = { uint8_t(reg | READ), 0x00 }, rx[2] = {0, 0};
-    cs(true);
-    HAL_SPI_TransmitReceive(pins::IMU_SPI, tx, rx, 2, 10);
-    cs(false);
-    return rx[1];
-}
-void Imu::wr(uint8_t reg, uint8_t val) {
-    uint8_t tx[2] = { reg, val };
-    cs(true);
-    HAL_SPI_Transmit(pins::IMU_SPI, tx, 2, 10);
-    cs(false);
-}
-void Imu::rdBurst(uint8_t reg, uint8_t* buf, uint8_t n) {
-    uint8_t cmd = reg | READ;
-    cs(true);
-    HAL_SPI_Transmit(pins::IMU_SPI, &cmd, 1, 10);
-    HAL_SPI_Receive(pins::IMU_SPI, buf, n, 10);
-    cs(false);
+bool Imu::writeRegister(uint8_t reg, uint8_t value)
+{
+    uint8_t tx[2] = { reg, value };
+
+    setChipSelect(true);
+    HAL_StatusTypeDef hal = HAL_SPI_Transmit(Pins::IMU_SPI, tx, 2, 10);
+    setChipSelect(false);
+
+    if (hal != HAL_OK)
+    {
+        return false;
+    }
+
+    return true;
 }
 
-uint8_t Imu::whoAmI() { return rd(REG_WHO_AM_I); }
+bool Imu::readBurst(uint8_t reg, uint8_t *p_buffer, uint8_t count)
+{
+    uint8_t cmd = uint8_t(reg | MPU_READ_FLAG);
 
-bool Imu::init() {
-    cs(false);
-    wr(REG_PWR_MGMT_1, 0x80); HAL_Delay(100);   // reset
-    wr(REG_PWR_MGMT_1, 0x01); HAL_Delay(50);    // clock = best
-    wr(REG_GYRO_CONFIG,  0x00);                 // +/-250 dps
-    wr(REG_ACCEL_CONFIG, 0x00);                 // +/-2 g
-    wr(REG_SMPLRT_DIV,   0x09);                 // 100 Hz
+    setChipSelect(true);
+    HAL_StatusTypeDef hal_a = HAL_SPI_Transmit(Pins::IMU_SPI, &cmd, 1, 10);
+    HAL_StatusTypeDef hal_b = HAL_SPI_Receive(Pins::IMU_SPI, p_buffer, count, 10);
+    setChipSelect(false);
+
+    if (hal_a != HAL_OK)
+    {
+        return false;
+    }
+
+    if (hal_b != HAL_OK)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool Imu::initialize()
+{
+    uint8_t id = 0;
+
+    setChipSelect(false);
+
+    writeRegister(MPU_REG_PWR_MGMT_1, 0x80);
+    HAL_Delay(100);
+    writeRegister(MPU_REG_PWR_MGMT_1, 0x01);
+    HAL_Delay(50);
+    writeRegister(MPU_REG_GYRO_CONFIG, 0x00);
+    writeRegister(MPU_REG_ACCEL_CONFIG, 0x00);
+    writeRegister(MPU_REG_SMPLRT_DIV, 0x09);
     HAL_Delay(20);
-    return whoAmI() == WHO_AM_I_EXPECTED;
+
+    if (readWhoAmI(id) == false)
+    {
+        return false;
+    }
+
+    if (id != MPU_WHO_AM_I_VALUE)
+    {
+        return false;
+    }
+
+    return true;
 }
 
-void Imu::readAccel(float g[3]) {
-    uint8_t b[6]; rdBurst(REG_ACCEL_XOUT_H, b, 6);
-    for (int i = 0; i < 3; ++i) {
-        int16_t raw = (int16_t)((b[2*i] << 8) | b[2*i+1]);
-        g[i] = raw / accelLSB_;
-    }
-}
-void Imu::readGyro(float dps[3]) {
-    uint8_t b[6]; rdBurst(REG_GYRO_XOUT_H, b, 6);
-    for (int i = 0; i < 3; ++i) {
-        int16_t raw = (int16_t)((b[2*i] << 8) | b[2*i+1]);
-        dps[i] = raw / gyroLSB_ - gBias_[i];
-    }
-}
-float Imu::readTempC() {
-    uint8_t b[2]; rdBurst(REG_TEMP_OUT_H, b, 2);
-    int16_t raw = (int16_t)((b[0] << 8) | b[1]);
-    return raw / 333.87f + 21.0f;
+const char *Imu::getName()
+{
+    return "Imu";
 }
 
-void Imu::captureGyroBias() {
-    float sum[3] = {0, 0, 0};
-    const int N = 200;
-    for (int k = 0; k < N; ++k) {
-        uint8_t b[6]; rdBurst(REG_GYRO_XOUT_H, b, 6);
-        for (int i = 0; i < 3; ++i)
-            sum[i] += (int16_t)((b[2*i] << 8) | b[2*i+1]) / gyroLSB_;
+ComponentId Imu::getComponent()
+{
+    return ComponentId::IMU;
+}
+
+bool Imu::readWhoAmI(uint8_t &out_id)
+{
+    return readRegister(MPU_REG_WHO_AM_I, out_id);
+}
+
+bool Imu::readAccel(float &out_x, float &out_y, float &out_z)
+{
+    uint8_t raw[6] = {0};
+
+    if (readBurst(MPU_REG_ACCEL_XOUT_H, raw, 6) == false)
+    {
+        return false;
+    }
+
+    int16_t x = int16_t((raw[0] << 8) | raw[1]);
+    int16_t y = int16_t((raw[2] << 8) | raw[3]);
+    int16_t z = int16_t((raw[4] << 8) | raw[5]);
+
+    out_x = float(x) / MPU_ACCEL_LSB;
+    out_y = float(y) / MPU_ACCEL_LSB;
+    out_z = float(z) / MPU_ACCEL_LSB;
+
+    return true;
+}
+
+bool Imu::readGyro(float &out_x, float &out_y, float &out_z)
+{
+    uint8_t raw[6] = {0};
+
+    if (readBurst(MPU_REG_GYRO_XOUT_H, raw, 6) == false)
+    {
+        return false;
+    }
+
+    int16_t x = int16_t((raw[0] << 8) | raw[1]);
+    int16_t y = int16_t((raw[2] << 8) | raw[3]);
+    int16_t z = int16_t((raw[4] << 8) | raw[5]);
+
+    out_x = (float(x) / MPU_GYRO_LSB) - m_gyroBias[0];
+    out_y = (float(y) / MPU_GYRO_LSB) - m_gyroBias[1];
+    out_z = (float(z) / MPU_GYRO_LSB) - m_gyroBias[2];
+
+    return true;
+}
+
+bool Imu::readTemperature(float &out_celsius)
+{
+    uint8_t raw[2] = {0};
+
+    if (readBurst(MPU_REG_TEMP_OUT_H, raw, 2) == false)
+    {
+        return false;
+    }
+
+    int16_t value = int16_t((raw[0] << 8) | raw[1]);
+    out_celsius = (float(value) / MPU_TEMP_SENS) + MPU_TEMP_OFFSET;
+
+    return true;
+}
+
+bool Imu::captureGyroBias()
+{
+    float   sum_x = 0.0f;
+    float   sum_y = 0.0f;
+    float   sum_z = 0.0f;
+    int     sample = 0;
+    uint8_t raw[6] = {0};
+
+    for (sample = 0; sample < MPU_BIAS_SAMPLES; sample++)
+    {
+        if (readBurst(MPU_REG_GYRO_XOUT_H, raw, 6) == false)
+        {
+            return false;
+        }
+
+        sum_x += float(int16_t((raw[0] << 8) | raw[1])) / MPU_GYRO_LSB;
+        sum_y += float(int16_t((raw[2] << 8) | raw[3])) / MPU_GYRO_LSB;
+        sum_z += float(int16_t((raw[4] << 8) | raw[5])) / MPU_GYRO_LSB;
         HAL_Delay(2);
     }
-    for (int i = 0; i < 3; ++i) gBias_[i] = sum[i] / N;
+
+    m_gyroBias[0] = sum_x / float(MPU_BIAS_SAMPLES);
+    m_gyroBias[1] = sum_y / float(MPU_BIAS_SAMPLES);
+    m_gyroBias[2] = sum_z / float(MPU_BIAS_SAMPLES);
+
+    return true;
 }
 
-StatusCode Imu::selftestPassive() {
-    if (whoAmI() != WHO_AM_I_EXPECTED) {
-        // Distinguish "nothing there" (0x00/0xFF) from "wrong chip".
-        uint8_t id = whoAmI();
-        Fault f = (id == 0x00 || id == 0xFF) ? Fault::NoResponse : Fault::InvalidId;
-        return StatusCode(THIS_BOARD, Component::Imu, 0, f);
+bool Imu::runPassiveTest(StatusCode &out_status)
+{
+    uint8_t id = 0;
+    float   ax = 0.0f;
+    float   ay = 0.0f;
+    float   az = 0.0f;
+    float   temperature = 0.0f;
+
+    if (readWhoAmI(id) == false)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IMU, 0, Fault::NO_RESPONSE);
+        return false;
     }
-    float g[3]; readAccel(g);
-    float mag = std::sqrt(g[0]*g[0] + g[1]*g[1] + g[2]*g[2]);
-    if (mag < 0.85f || mag > 1.15f)         // must be sensing ~1g of gravity
-        return StatusCode(THIS_BOARD, Component::Imu, 0, Fault::OutOfRange);
 
-    float t = readTempC();
-    if (t < 0.0f || t > 60.0f)              // garbage SPI read catch
-        return StatusCode(THIS_BOARD, Component::Imu, 0, Fault::OutOfRange);
+    if (id != MPU_WHO_AM_I_VALUE)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IMU, 0, Fault::INVALID_ID);
+        return false;
+    }
 
-    captureGyroBias();                      // assume at rest in start cell
-    return OK(THIS_BOARD, Component::Imu);
+    if (readAccel(ax, ay, az) == false)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IMU, 0, Fault::NO_RESPONSE);
+        return false;
+    }
+
+    float magnitude = std::sqrt((ax * ax) + (ay * ay) + (az * az));
+
+    if (magnitude < MPU_ACCEL_MAG_MIN)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IMU, 0, Fault::OUT_OF_RANGE);
+        return false;
+    }
+
+    if (magnitude > MPU_ACCEL_MAG_MAX)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IMU, 0, Fault::OUT_OF_RANGE);
+        return false;
+    }
+
+    if (readTemperature(temperature) == false)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IMU, 0, Fault::NO_RESPONSE);
+        return false;
+    }
+
+    gLogger.info("Imu whoami:0x%02X accel x:%.2f y:%.2f z:%.2f mag:%.2f temp:%.1f",
+                 id, ax, ay, az, magnitude, temperature);
+
+    captureGyroBias();
+
+    out_status = makeOk(gThisBoard, ComponentId::IMU, 0);
+
+    return true;
 }
 
-StatusCode Imu::selftestInteractive(IConsole& c) {
-#if TEST_INTERACTIVE
-    const char* axis[3] = { "X (roll)", "Y (pitch)", "Z (yaw)" };
-    for (int i = 0; i < 3; ++i) {
-        c.logv("Rotate the robot about %s, then it will measure...\n", axis[i]);
-        if (!c.confirm("Ready?"))
-            return StatusCode(THIS_BOARD, Component::Imu, i, Fault::UserFail);
-        float peak = 0;
-        uint32_t t0 = HAL_GetTick();
-        while (HAL_GetTick() - t0 < 2000) {
-            float d[3]; readGyro(d);
-            float a = d[i] < 0 ? -d[i] : d[i];
-            if (a > peak) peak = a;
+bool Imu::selectAxisRate(uint8_t axis, float &out_rate)
+{
+    float gx = 0.0f;
+    float gy = 0.0f;
+    float gz = 0.0f;
+
+    if (readGyro(gx, gy, gz) == false)
+    {
+        return false;
+    }
+
+    if (axis == 0)
+    {
+        out_rate = gx;
+        return true;
+    }
+
+    if (axis == 1)
+    {
+        out_rate = gy;
+        return true;
+    }
+
+    out_rate = gz;
+
+    return true;
+}
+
+bool Imu::runInteractiveTest(StatusCode &out_status)
+{
+    uint8_t  axis = 0;
+    uint32_t start = 0;
+    float    rate = 0.0f;
+    float    peak = 0.0f;
+
+    if (gDebugBuild == false)
+    {
+        out_status = makeStatus(gThisBoard, ComponentId::IMU, 0, Fault::NOT_TESTED);
+        return false;
+    }
+
+    for (axis = 0; axis < MPU_AXIS_COUNT; axis++)
+    {
+        char message[48] = {0};
+        snprintf(message, sizeof(message), "Next: rotate IMU about axis %u", axis);
+        debugPrompt(message);
+
+        peak = 0.0f;
+        start = HAL_GetTick();
+
+        while ((HAL_GetTick() - start) < MPU_ROTATE_WINDOW_MS)
+        {
+            selectAxisRate(axis, rate);
+
+            if (rate < 0.0f)
+            {
+                rate = -rate;
+            }
+
+            if (rate > peak)
+            {
+                peak = rate;
+            }
+
             HAL_Delay(5);
         }
-        c.logv("  peak %s rate = %d dps\n", axis[i], (int)peak);
-        if (peak < 20.0f)                   // barely moved -> axis dead/swapped
-            return StatusCode(THIS_BOARD, Component::Imu, i, Fault::NoChange);
+
+        gLogger.info("Imu axis:%u peak_dps:%d", axis, int(peak));
+
+        if (peak < MPU_ROTATE_MIN_DPS)
+        {
+            out_status = makeStatus(gThisBoard, ComponentId::IMU, axis, Fault::NO_CHANGE);
+            return false;
+        }
     }
-    return OK(THIS_BOARD, Component::Imu);
-#else
-    (void)c;
-    return StatusCode(THIS_BOARD, Component::Imu, 0, Fault::NotTested);
-#endif
+
+    out_status = makeOk(gThisBoard, ComponentId::IMU, 0);
+
+    return true;
 }

@@ -1,80 +1,73 @@
-// status_codes.h
-// SHARED between STM32 (Motion Controller) and ESP32 (Compute Board).
-// Keep this file byte-identical on both boards so the error vocabulary matches.
-//
-// A status is packed into a single uint16_t so it can be compared, switched on,
-// stored, and sent over UART in two bytes:
-//
-//   bits 15..13  Board     (3)
-//   bits 12..8   Component (5)
-//   bits  7..5   Instance  (3)   which IR pair / which motor / etc.
-//   bits  4..0   Fault     (5)
-//
 #pragma once
+
 #include <cstdint>
 
-enum class Board : uint8_t { None = 0, STM32 = 1, ESP32 = 2 };
-
-enum class Component : uint8_t {
-    None = 0, System, Power, Imu, Encoder, Motor, Drivetrain,
-    IrEmitter, IrReceiver, IrPair, Cliff, UartLink, Display, Camera, Flash
+enum class Board : uint8_t
+{
+    NONE  = 0,
+    STM32 = 1,
+    ESP32 = 2
 };
 
-enum class Fault : uint8_t {
-    Ok = 0,
-    NoResponse,     // device did not answer (SPI/I2C/UART)
-    OutOfRange,     // value implausible
-    StuckHigh,      // input railed high (likely shorted / unplugged)
-    StuckLow,       // input railed low
-    NoChange,       // expected a delta, saw none (emitter/motor did nothing)
-    WrongDirection, // moved/counted opposite to command
-    Timeout,        // test did not complete in time
-    Underperform,   // moved, but far less than expected (weak link / bind)
-    Crosstalk,      // neighbour responded when it should not have
-    NotPresent,     // configured but no hardware detected
-    NotTested,      // skipped (disabled, or no resistors, etc.)
-    UserFail,       // a human said "no" during an interactive test
-    InvalidId       // wrong chip ID
+enum class ComponentId : uint8_t
+{
+    NONE        = 0,
+    SYSTEM      = 1,
+    POWER       = 2,
+    IMU         = 3,
+    ENCODER     = 4,
+    MOTOR       = 5,
+    DRIVETRAIN  = 6,
+    IR_EMITTER  = 7,
+    IR_RECEIVER = 8,
+    IR_PAIR     = 9,
+    CLIFF       = 10,
+    UART_LINK   = 11,
+    DISPLAY     = 12,
+    CAMERA      = 13,
+    FLASH_MEM   = 14
 };
 
-struct StatusCode {
-    uint16_t raw;
-
-    constexpr StatusCode() : raw(0) {}
-    constexpr explicit StatusCode(uint16_t r) : raw(r) {}
-    constexpr StatusCode(Board b, Component c, uint8_t inst, Fault f)
-        : raw(uint16_t((uint16_t(b) << 13) |
-                       (uint16_t(c) << 8)  |
-                       (uint16_t(inst & 0x7) << 5) |
-                       (uint16_t(f) & 0x1F))) {}
-
-    constexpr Board     board()     const { return Board(raw >> 13); }
-    constexpr Component component() const { return Component((raw >> 8) & 0x1F); }
-    constexpr uint8_t   instance()  const { return uint8_t((raw >> 5) & 0x7); }
-    constexpr Fault     fault()     const { return Fault(raw & 0x1F); }
-
-    constexpr bool ok()   const { return fault() == Fault::Ok; }
-    constexpr bool fail() const { return !ok(); }
-
-    constexpr bool operator==(const StatusCode& o) const { return raw == o.raw; }
-    constexpr bool operator!=(const StatusCode& o) const { return raw != o.raw; }
+enum class Fault : uint8_t
+{
+    OK              = 0,
+    NO_RESPONSE     = 1,
+    OUT_OF_RANGE    = 2,
+    STUCK_HIGH      = 3,
+    STUCK_LOW       = 4,
+    NO_CHANGE       = 5,
+    WRONG_DIRECTION = 6,
+    TIMEOUT         = 7,
+    UNDERPERFORM    = 8,
+    CROSSTALK       = 9,
+    NOT_PRESENT     = 10,
+    NOT_TESTED      = 11,
+    USER_FAIL       = 12,
+    INVALID_ID      = 13
 };
 
-// Convenience: an OK code for a given board/component/instance.
-constexpr StatusCode OK(Board b, Component c, uint8_t inst = 0) {
-    return StatusCode(b, c, inst, Fault::Ok);
-}
+class StatusCode
+{
+public:
+    StatusCode();
 
-// Worst-of accumulator: keep the first failing code seen.
-inline StatusCode& worst(StatusCode& acc, StatusCode next) {
-    if (acc.ok() && next.fail()) acc = next;
-    return acc;
-}
+    bool        isOk() const;
+    Board       getBoard() const;
+    ComponentId getComponent() const;
+    uint8_t     getInstance() const;
+    Fault       getFault() const;
+    uint16_t    getRaw() const;
+    void        setRaw(uint16_t raw);
 
-#if defined(DEBUG_BUILD)
-const char* board_str(Board);
-const char* component_str(Component);
-const char* fault_str(Fault);
-// Fills buf with e.g. "STM32/IrPair[2]: NoChange". Debug build only.
-void status_to_string(StatusCode, char* buf, uint32_t buflen);
-#endif
+    uint16_t m_raw;
+};
+
+StatusCode makeStatus(Board board, ComponentId component, uint8_t instance, Fault fault);
+StatusCode makeOk(Board board, ComponentId component, uint8_t instance);
+
+bool combineWorst(StatusCode &io_accumulator, StatusCode candidate);
+
+const char *boardName(Board board);
+const char *componentName(ComponentId component);
+const char *faultName(Fault fault);
+bool        statusToString(StatusCode status, char *p_out, uint32_t out_len);
