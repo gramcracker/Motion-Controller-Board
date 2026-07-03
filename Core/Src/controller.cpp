@@ -37,6 +37,8 @@ bool Controller::initialize()
 
 bool Controller::execute()
 {
+    serviceLink();
+
     switch (m_stateMachine.getState())
     {
         case ControllerState::BOOT:
@@ -152,6 +154,101 @@ bool Controller::isButtonDown()
     return false;
 }
 
+void Controller::serviceLink()
+{
+    LinkFrame frame;
+
+    while (m_link.poll(frame) == true)
+    {
+        dispatchLink(frame);
+    }
+}
+
+SelfTest *Controller::findTestByComponent(ComponentId component)
+{
+    int test = 0;
+
+    for (test = 0; test < m_testCount; test++)
+    {
+        if (m_pTests[test]->getComponent() == component)
+        {
+            return m_pTests[test];
+        }
+    }
+
+    return nullptr;
+}
+
+void Controller::handleRunTestCommand(const LinkFrame &frame)
+{
+    StatusCode  result;
+    ComponentId component = ComponentId::NONE;
+    SelfTest   *p_test    = nullptr;
+
+    if (frame.length < 1)
+    {
+        m_link.sendNack();
+        return;
+    }
+
+    component = ComponentId(frame.payload[0]);
+    p_test    = findTestByComponent(component);
+
+    if (p_test == nullptr)
+    {
+        result = makeStatus(gThisBoard, component, 0, Fault::INVALID_ID);
+        m_link.sendTestDone(result);
+        return;
+    }
+
+    p_test->runPassiveTest(result);
+    m_link.sendTestDone(result);
+}
+
+void Controller::dispatchLink(const LinkFrame &frame)
+{
+    switch (frame.type)
+    {
+        case LinkCmd::Ping:
+            m_link.sendPong();
+            break;
+
+        case LinkCmd::GetResults:
+            m_link.sendResults(m_results, m_testCount);
+            break;
+
+        case LinkCmd::RunTest:
+            handleRunTestCommand(frame);
+            break;
+
+        case LinkCmd::StartRun:
+            m_stateMachine.setState(ControllerState::RUN);
+            m_link.sendAck();
+            break;
+
+        case LinkCmd::EStop:
+            HAL_GPIO_WritePin(Pins::MOTOR_STBY.p_port, Pins::MOTOR_STBY.pin, GPIO_PIN_RESET);
+            m_stateMachine.setState(ControllerState::FAULT);
+            m_link.sendAck();
+            break;
+
+        default:
+            m_link.sendNack();
+            break;
+    }
+}
+
+void Controller::sendBootedOnce()
+{
+    if (m_bootedSent == true)
+    {
+        return;
+    }
+
+    m_link.sendBooted();
+    m_bootedSent = true;
+}
+
 void Controller::handleBoot()
 {
     int test = 0;
@@ -190,6 +287,7 @@ void Controller::handlePassiveTest()
         ledBlink(3);
     }
 
+    sendBootedOnce();
     m_stateMachine.setState(ControllerState::RUN);
 }
 
@@ -203,6 +301,7 @@ void Controller::handleDebugTest()
     }
 
     runPassiveSuite(worst);
+    sendBootedOnce();
     gLogger.info("Debug mode, each step waits for a button press");
     runAllInteractive();
     gLogger.info("Debug tests complete, reset board to repeat");

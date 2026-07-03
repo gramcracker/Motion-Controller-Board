@@ -23,6 +23,12 @@ private:
     bool runAllInteractive();
     bool isButtonDown();
 
+    void      serviceLink();
+    void      dispatchLink(const LinkFrame &frame);
+    void      handleRunTestCommand(const LinkFrame &frame);
+    void      sendBootedOnce();
+    SelfTest *findTestByComponent(ComponentId component);
+
     void handleBoot();
     void handlePassiveTest();
     void handleDebugTest();
@@ -43,6 +49,7 @@ private:
     StatusCode m_results[CONTROLLER_MAX_TESTS];
 
     uint32_t   m_lastHeartbeat = 0;
+    bool       m_bootedSent    = false;
 };
 
 extern Controller gController;
