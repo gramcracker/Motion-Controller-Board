@@ -14,3 +14,5 @@
 #define MOTOR_MIN_COUNTS     40
 #define MOTOR_NOISE_COUNTS   3
 #define MOTOR_SETTLE_MS      60
+
+#define DRIVE_WATCHDOG_MS    200

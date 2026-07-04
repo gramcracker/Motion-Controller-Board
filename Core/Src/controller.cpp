@@ -222,11 +222,30 @@ void Controller::dispatchLink(const LinkFrame &frame)
             break;
 
         case LinkCmd::StartRun:
+            if (ENABLE_DRIVETRAIN == 1)
+            {
+                m_drivetrain.setEnabled(true);
+            }
             m_stateMachine.setState(ControllerState::RUN);
             m_link.sendAck();
             break;
 
+        case LinkCmd::Drive:
+            handleDriveCommand(frame);
+            break;
+
+        case LinkCmd::SetIr:
+            handleSetIrCommand(frame);
+            break;
+
+        case LinkCmd::Reboot:
+            m_link.sendAck();
+            HAL_NVIC_SystemReset();
+            break;
+
         case LinkCmd::EStop:
+            m_driveV = 0;
+            m_driveW = 0;
             HAL_GPIO_WritePin(Pins::MOTOR_STBY.p_port, Pins::MOTOR_STBY.pin, GPIO_PIN_RESET);
             m_stateMachine.setState(ControllerState::FAULT);
             m_link.sendAck();
@@ -236,6 +255,98 @@ void Controller::dispatchLink(const LinkFrame &frame)
             m_link.sendNack();
             break;
     }
+}
+
+void Controller::handleDriveCommand(const LinkFrame &frame)
+{
+    if (frame.length < 4)
+    {
+        return;
+    }
+
+    int16_t v = int16_t(uint16_t(frame.payload[0]) | (uint16_t(frame.payload[1]) << 8));
+    int16_t w = int16_t(uint16_t(frame.payload[2]) | (uint16_t(frame.payload[3]) << 8));
+
+    m_driveV      = v;
+    m_driveW      = w;
+    m_lastDriveMs = HAL_GetTick();
+
+    applyDrive();
+}
+
+void Controller::handleSetIrCommand(const LinkFrame &frame)
+{
+    if (frame.length < 1)
+    {
+        m_link.sendNack();
+        return;
+    }
+
+    m_irMode = frame.payload[0];
+    m_link.sendAck();
+}
+
+void Controller::applyDrive()
+{
+    if (ENABLE_DRIVETRAIN == 0)
+    {
+        return;
+    }
+
+    if (m_stateMachine.getState() != ControllerState::RUN)
+    {
+        return;
+    }
+
+    int32_t left  = int32_t(m_driveV) - int32_t(m_driveW);
+    int32_t right = int32_t(m_driveV) + int32_t(m_driveW);
+
+    if (left > int32_t(Pins::MOTOR_PWM_MAX))
+    {
+        left = int32_t(Pins::MOTOR_PWM_MAX);
+    }
+
+    if (left < -int32_t(Pins::MOTOR_PWM_MAX))
+    {
+        left = -int32_t(Pins::MOTOR_PWM_MAX);
+    }
+
+    if (right > int32_t(Pins::MOTOR_PWM_MAX))
+    {
+        right = int32_t(Pins::MOTOR_PWM_MAX);
+    }
+
+    if (right < -int32_t(Pins::MOTOR_PWM_MAX))
+    {
+        right = -int32_t(Pins::MOTOR_PWM_MAX);
+    }
+
+    m_drivetrain.drive(MOTOR_SIDE_LEFT, int16_t(left));
+    m_drivetrain.drive(MOTOR_SIDE_RIGHT, int16_t(right));
+}
+
+void Controller::driveWatchdog()
+{
+    if (ENABLE_DRIVETRAIN == 0)
+    {
+        return;
+    }
+
+    if ((HAL_GetTick() - m_lastDriveMs) <= DRIVE_WATCHDOG_MS)
+    {
+        return;
+    }
+
+    if ((m_driveV == 0) && (m_driveW == 0))
+    {
+        return;
+    }
+
+    m_driveV = 0;
+    m_driveW = 0;
+
+    m_drivetrain.coast(MOTOR_SIDE_LEFT);
+    m_drivetrain.coast(MOTOR_SIDE_RIGHT);
 }
 
 void Controller::sendBootedOnce()
@@ -309,6 +420,8 @@ void Controller::handleDebugTest()
 
 void Controller::handleRun()
 {
+    driveWatchdog();
+
     if ((HAL_GetTick() - m_lastHeartbeat) < HEARTBEAT_PERIOD_MS)
     {
         return;

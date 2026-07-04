@@ -15,6 +15,9 @@ enum class LinkCmd : uint8_t {
     GetResults  = 0x02,  // send all stored self-test status codes
     RunTest     = 0x03,  // payload[0] = Component id; run that test now (debug)
     StartRun    = 0x10,  // leave self-test mode, begin normal operation
+    Drive       = 0x11,  // payload: v:int16, w:int16 (little-endian); fire-and-forget
+    SetIr       = 0x12,  // payload[0] = IR emitter mode
+    Reboot      = 0x7E,  // soft reset (NVIC_SystemReset)
     EStop       = 0x7F,  // force STBY low immediately
 };
 
@@ -24,6 +27,7 @@ enum class LinkResp : uint8_t {
     Results     = 0x82,  // payload = N * uint16_t status codes (little-endian)
     TestDone    = 0x83,  // payload = single uint16_t status code
     Booted      = 0x84,  // sent once, unprompted, after passive self-test
+    Telemetry   = 0x85,  // periodic sensor snapshot (Phase 2; not yet emitted)
     Ack         = 0x8E,
     Nack        = 0x8F,
 };

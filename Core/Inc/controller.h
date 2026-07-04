@@ -26,6 +26,10 @@ private:
     void      serviceLink();
     void      dispatchLink(const LinkFrame &frame);
     void      handleRunTestCommand(const LinkFrame &frame);
+    void      handleDriveCommand(const LinkFrame &frame);
+    void      handleSetIrCommand(const LinkFrame &frame);
+    void      applyDrive();
+    void      driveWatchdog();
     void      sendBootedOnce();
     SelfTest *findTestByComponent(ComponentId component);
 
@@ -50,6 +54,11 @@ private:
 
     uint32_t   m_lastHeartbeat = 0;
     bool       m_bootedSent    = false;
+
+    int16_t    m_driveV      = 0;
+    int16_t    m_driveW      = 0;
+    uint32_t   m_lastDriveMs = 0;
+    uint8_t    m_irMode      = 0;
 };
 
 extern Controller gController;
