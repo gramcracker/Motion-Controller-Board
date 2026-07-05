@@ -1,5 +1,6 @@
 #include "controller.h"
 #include "ir_array_globals.h"
+#include <string.h>
 #include "config.h"
 #include "globals.h"
 #include "pins.h"
@@ -32,6 +33,24 @@ static void putU32(uint8_t *p_buf, int &idx, uint32_t value)
     idx++;
     p_buf[idx] = uint8_t((value >> 24) & 0xFF);
     idx++;
+}
+
+static void putFloat(uint8_t *p_buf, int &idx, float value)
+{
+    uint32_t bits = 0;
+    memcpy(&bits, &value, sizeof(bits));
+    putU32(p_buf, idx, bits);
+}
+
+static float getFloat(const uint8_t *p_buf, int &idx)
+{
+    uint32_t bits = uint32_t(p_buf[idx]) | (uint32_t(p_buf[idx + 1]) << 8) | (uint32_t(p_buf[idx + 2]) << 16) | (uint32_t(p_buf[idx + 3]) << 24);
+    idx += 4;
+
+    float value = 0.0f;
+    memcpy(&value, &bits, sizeof(value));
+
+    return value;
 }
 
 static bool ledBlink(int count)
@@ -265,6 +284,14 @@ void Controller::dispatchLink(const LinkFrame &frame)
             handleSetIrCommand(frame);
             break;
 
+        case LinkCmd::GetParams:
+            handleGetParams();
+            break;
+
+        case LinkCmd::SetParams:
+            handleSetParams(frame);
+            break;
+
         case LinkCmd::Reboot:
             m_link.sendAck();
             HAL_NVIC_SystemReset();
@@ -398,6 +425,44 @@ void Controller::controlTick()
     m_motion.tick();
 }
 
+void Controller::handleGetParams()
+{
+    MotionParams params;
+    uint8_t      payload[20] = {0};
+    int          idx = 0;
+
+    m_motion.getParams(params);
+
+    putFloat(payload, idx, params.mm_per_count);
+    putFloat(payload, idx, params.track_width_mm);
+    putFloat(payload, idx, params.kp);
+    putFloat(payload, idx, params.ki);
+    putFloat(payload, idx, params.kd);
+
+    m_link.sendResponse(LinkResp::Params, payload, uint8_t(idx));
+}
+
+void Controller::handleSetParams(const LinkFrame &frame)
+{
+    MotionParams params;
+    int          idx = 0;
+
+    if (frame.length < 20)
+    {
+        m_link.sendNack();
+        return;
+    }
+
+    params.mm_per_count   = getFloat(frame.payload, idx);
+    params.track_width_mm = getFloat(frame.payload, idx);
+    params.kp             = getFloat(frame.payload, idx);
+    params.ki             = getFloat(frame.payload, idx);
+    params.kd             = getFloat(frame.payload, idx);
+
+    m_motion.setParams(params);
+    m_link.sendAck();
+}
+
 void Controller::sendTelemetry()
 {
     uint8_t  payload[LINK_MAX_PAYLOAD] = {0};
@@ -407,6 +472,9 @@ void Controller::sendTelemetry()
     int32_t  enc_r = 0;
     int16_t  meas_v = 0;
     int16_t  meas_w = 0;
+    int16_t  pose_x = 0;
+    int16_t  pose_y = 0;
+    int16_t  pose_theta = 0;
     float    ax = 0.0f;
     float    ay = 0.0f;
     float    az = 0.0f;
@@ -420,6 +488,7 @@ void Controller::sendTelemetry()
     {
         m_motion.getEncoderTotals(enc_l, enc_r);
         m_motion.getBodyVelocity(meas_v, meas_w);
+        m_motion.getPose(pose_x, pose_y, pose_theta);
     }
 
     if (ENABLE_IMU == 1)
@@ -453,9 +522,9 @@ void Controller::sendTelemetry()
     putU16(payload, idx, 0);
     putU32(payload, idx, uint32_t(enc_l));
     putU32(payload, idx, uint32_t(enc_r));
-    putU16(payload, idx, 0);
-    putU16(payload, idx, 0);
-    putU16(payload, idx, 0);
+    putU16(payload, idx, uint16_t(pose_x));
+    putU16(payload, idx, uint16_t(pose_y));
+    putU16(payload, idx, uint16_t(pose_theta));
     putU16(payload, idx, uint16_t(meas_v));
     putU16(payload, idx, uint16_t(meas_w));
     putU16(payload, idx, uint16_t(int16_t(ax * 1000.0f)));

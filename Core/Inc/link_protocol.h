@@ -17,6 +17,8 @@ enum class LinkCmd : uint8_t {
     StartRun    = 0x10,  // leave self-test mode, begin normal operation
     Drive       = 0x11,  // payload: v:int16, w:int16 (little-endian); fire-and-forget
     SetIr       = 0x12,  // payload[0] = IR emitter mode
+    GetParams   = 0x13,  // request motion parameter vector (theta)
+    SetParams   = 0x14,  // payload = motion parameter vector (theta)
     Reboot      = 0x7E,  // soft reset (NVIC_SystemReset)
     EStop       = 0x7F,  // force STBY low immediately
 };
@@ -27,7 +29,8 @@ enum class LinkResp : uint8_t {
     Results     = 0x82,  // payload = N * uint16_t status codes (little-endian)
     TestDone    = 0x83,  // payload = single uint16_t status code
     Booted      = 0x84,  // sent once, unprompted, after passive self-test
-    Telemetry   = 0x85,  // periodic sensor snapshot (Phase 2; not yet emitted)
+    Telemetry   = 0x85,  // periodic sensor snapshot
+    Params      = 0x86,  // motion parameter vector (theta), 5 x float32 little-endian
     Ack         = 0x8E,
     Nack        = 0x8F,
 };
@@ -44,4 +47,4 @@ inline uint8_t link_crc8(const uint8_t* d, uint32_t n) {
 }
 
 constexpr uint32_t LINK_MAX_PAYLOAD = 64;
-constexpr uint32_t LINK_PING_TIMEOUT_MS = 1500;  // ESP waits this long for Pong
+constexpr uint32_t LINK_PING_TIMEOUT_MS = 1500;  // ESP waits this long for Pongz

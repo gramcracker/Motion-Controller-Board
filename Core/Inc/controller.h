@@ -30,6 +30,8 @@ private:
     void      handleRunTestCommand(const LinkFrame &frame);
     void      handleDriveCommand(const LinkFrame &frame);
     void      handleSetIrCommand(const LinkFrame &frame);
+    void      handleGetParams();
+    void      handleSetParams(const LinkFrame &frame);
     void      applyDrive();
     void      driveWatchdog();
     void      sendTelemetry();
