@@ -15,3 +15,7 @@ enum class ControllerState
 #define HEARTBEAT_PERIOD_MS     1000
 #define BOOT_BUTTON_SETTLE_MS   20
 #define STATUS_TEXT_LEN         48
+
+#define TELEMETRY_PERIOD_MS     20
+#define TELEMETRY_VERSION       2
+#define TELEMETRY_WALL_COUNT    4

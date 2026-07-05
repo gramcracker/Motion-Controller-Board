@@ -1,4 +1,5 @@
 #include "controller.h"
+#include "ir_array_globals.h"
 #include "config.h"
 #include "globals.h"
 #include "pins.h"
@@ -6,6 +7,32 @@
 #include "stm32f4xx_hal.h"
 
 Controller gController;
+
+static void putU8(uint8_t *p_buf, int &idx, uint8_t value)
+{
+    p_buf[idx] = value;
+    idx++;
+}
+
+static void putU16(uint8_t *p_buf, int &idx, uint16_t value)
+{
+    p_buf[idx] = uint8_t(value & 0xFF);
+    idx++;
+    p_buf[idx] = uint8_t((value >> 8) & 0xFF);
+    idx++;
+}
+
+static void putU32(uint8_t *p_buf, int &idx, uint32_t value)
+{
+    p_buf[idx] = uint8_t(value & 0xFF);
+    idx++;
+    p_buf[idx] = uint8_t((value >> 8) & 0xFF);
+    idx++;
+    p_buf[idx] = uint8_t((value >> 16) & 0xFF);
+    idx++;
+    p_buf[idx] = uint8_t((value >> 24) & 0xFF);
+    idx++;
+}
 
 static bool ledBlink(int count)
 {
@@ -271,6 +298,8 @@ void Controller::handleDriveCommand(const LinkFrame &frame)
     m_driveW      = w;
     m_lastDriveMs = HAL_GetTick();
 
+    m_motion.setTargets(v, w);
+
     applyDrive();
 }
 
@@ -289,6 +318,11 @@ void Controller::handleSetIrCommand(const LinkFrame &frame)
 void Controller::applyDrive()
 {
     if (ENABLE_DRIVETRAIN == 0)
+    {
+        return;
+    }
+
+    if (ENABLE_VELOCITY_LOOP == 1)
     {
         return;
     }
@@ -345,8 +379,103 @@ void Controller::driveWatchdog()
     m_driveV = 0;
     m_driveW = 0;
 
-    m_drivetrain.coast(MOTOR_SIDE_LEFT);
-    m_drivetrain.coast(MOTOR_SIDE_RIGHT);
+    m_motion.setTargets(0, 0);
+
+    if (ENABLE_VELOCITY_LOOP == 0)
+    {
+        m_drivetrain.coast(MOTOR_SIDE_LEFT);
+        m_drivetrain.coast(MOTOR_SIDE_RIGHT);
+    }
+}
+
+void Controller::controlTick()
+{
+    if (m_stateMachine.getState() != ControllerState::RUN)
+    {
+        return;
+    }
+
+    m_motion.tick();
+}
+
+void Controller::sendTelemetry()
+{
+    uint8_t  payload[LINK_MAX_PAYLOAD] = {0};
+    int      idx   = 0;
+    int      pair  = 0;
+    int32_t  enc_l = 0;
+    int32_t  enc_r = 0;
+    int16_t  meas_v = 0;
+    int16_t  meas_w = 0;
+    float    ax = 0.0f;
+    float    ay = 0.0f;
+    float    az = 0.0f;
+    float    gx = 0.0f;
+    float    gy = 0.0f;
+    float    gz = 0.0f;
+    uint16_t wall[TELEMETRY_WALL_COUNT] = {0};
+    uint16_t cliff = 0;
+
+    if (ENABLE_DRIVETRAIN == 1)
+    {
+        m_motion.getEncoderTotals(enc_l, enc_r);
+        m_motion.getBodyVelocity(meas_v, meas_w);
+    }
+
+    if (ENABLE_IMU == 1)
+    {
+        m_imu.readAccel(ax, ay, az);
+        m_imu.readGyro(gx, gy, gz);
+    }
+
+    if (ENABLE_IR == 1)
+    {
+        for (pair = 0; pair < IR_PAIR_COUNT; pair++)
+        {
+            if (pair < TELEMETRY_WALL_COUNT)
+            {
+                m_irArray.readAmbient(uint8_t(pair), wall[pair]);
+            }
+        }
+    }
+
+    if (ENABLE_CLIFF == 1)
+    {
+        m_cliff.readValue(cliff);
+    }
+
+    // layout: see Communication Protocol doc, Telemetry frame.
+    // accel packed as milli-g, gyro packed as deci-deg/s.
+    putU8(payload, idx, TELEMETRY_VERSION);
+    putU8(payload, idx, m_telemetrySeq);
+    putU32(payload, idx, HAL_GetTick());
+    putU8(payload, idx, uint8_t(m_stateMachine.getState()));
+    putU16(payload, idx, 0);
+    putU32(payload, idx, uint32_t(enc_l));
+    putU32(payload, idx, uint32_t(enc_r));
+    putU16(payload, idx, 0);
+    putU16(payload, idx, 0);
+    putU16(payload, idx, 0);
+    putU16(payload, idx, uint16_t(meas_v));
+    putU16(payload, idx, uint16_t(meas_w));
+    putU16(payload, idx, uint16_t(int16_t(ax * 1000.0f)));
+    putU16(payload, idx, uint16_t(int16_t(ay * 1000.0f)));
+    putU16(payload, idx, uint16_t(int16_t(az * 1000.0f)));
+    putU16(payload, idx, uint16_t(int16_t(gx * 10.0f)));
+    putU16(payload, idx, uint16_t(int16_t(gy * 10.0f)));
+    putU16(payload, idx, uint16_t(int16_t(gz * 10.0f)));
+
+    for (pair = 0; pair < TELEMETRY_WALL_COUNT; pair++)
+    {
+        putU16(payload, idx, wall[pair]);
+    }
+
+    putU16(payload, idx, cliff);
+    putU16(payload, idx, 0);
+
+    m_telemetrySeq++;
+
+    m_link.sendResponse(LinkResp::Telemetry, payload, uint8_t(idx));
 }
 
 void Controller::sendBootedOnce()
@@ -398,6 +527,11 @@ void Controller::handlePassiveTest()
         ledBlink(3);
     }
 
+    if (ENABLE_DRIVETRAIN == 1)
+    {
+        m_motion.initialize(&m_drivetrain);
+    }
+
     sendBootedOnce();
     m_stateMachine.setState(ControllerState::RUN);
 }
@@ -421,6 +555,12 @@ void Controller::handleDebugTest()
 void Controller::handleRun()
 {
     driveWatchdog();
+
+    if ((HAL_GetTick() - m_lastTelemetryMs) >= TELEMETRY_PERIOD_MS)
+    {
+        m_lastTelemetryMs = HAL_GetTick();
+        sendTelemetry();
+    }
 
     if ((HAL_GetTick() - m_lastHeartbeat) < HEARTBEAT_PERIOD_MS)
     {

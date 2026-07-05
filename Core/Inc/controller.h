@@ -9,6 +9,7 @@
 #include "drivetrain.h"
 #include "cliff.h"
 #include "ir_array.h"
+#include "motion_control.h"
 #include <cstdint>
 
 class Controller
@@ -16,6 +17,7 @@ class Controller
 public:
     bool initialize();
     bool execute();
+    void controlTick();
 
 private:
     bool buildTestList();
@@ -30,6 +32,7 @@ private:
     void      handleSetIrCommand(const LinkFrame &frame);
     void      applyDrive();
     void      driveWatchdog();
+    void      sendTelemetry();
     void      sendBootedOnce();
     SelfTest *findTestByComponent(ComponentId component);
 
@@ -44,7 +47,8 @@ private:
     Link       m_link;
     Power      m_power;
     Imu        m_imu;
-    Drivetrain m_drivetrain;
+    Drivetrain    m_drivetrain;
+    MotionControl m_motion;
     Cliff      m_cliff;
     IrArray    m_irArray;
 
@@ -59,6 +63,9 @@ private:
     int16_t    m_driveW      = 0;
     uint32_t   m_lastDriveMs = 0;
     uint8_t    m_irMode      = 0;
+
+    uint32_t   m_lastTelemetryMs = 0;
+    uint8_t    m_telemetrySeq    = 0;
 };
 
 extern Controller gController;
