@@ -21,7 +21,7 @@ inline const GpioPin IR_EMITTER_PINS[IR_PAIR_COUNT] =
 
 inline const uint32_t IR_RECEIVER_CHANNELS[IR_PAIR_COUNT] =
 {
-    ADC_CHANNEL_13,
-    ADC_CHANNEL_14,
-    ADC_CHANNEL_10
+    ADC_CHANNEL_12,   // G431: IR L on PB2
+    ADC_CHANNEL_5,    // G431: IR R on PC4
+    ADC_CHANNEL_14
 };

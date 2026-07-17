@@ -10,24 +10,24 @@ bool adcReadChannel(uint32_t channel, uint32_t sample_time, uint16_t &out_value)
     config.Rank         = 1;
     config.SamplingTime = sample_time;
 
-    if (HAL_ADC_ConfigChannel(Pins::ADC1_H, &config) != HAL_OK)
+    if (HAL_ADC_ConfigChannel(Pins::ADC_H, &config) != HAL_OK)
     {
         return false;
     }
 
-    if (HAL_ADC_Start(Pins::ADC1_H) != HAL_OK)
+    if (HAL_ADC_Start(Pins::ADC_H) != HAL_OK)
     {
         return false;
     }
 
-    if (HAL_ADC_PollForConversion(Pins::ADC1_H, 5) != HAL_OK)
+    if (HAL_ADC_PollForConversion(Pins::ADC_H, 5) != HAL_OK)
     {
-        HAL_ADC_Stop(Pins::ADC1_H);
+        HAL_ADC_Stop(Pins::ADC_H);
         return false;
     }
 
-    out_value = uint16_t(HAL_ADC_GetValue(Pins::ADC1_H));
-    HAL_ADC_Stop(Pins::ADC1_H);
+    out_value = uint16_t(HAL_ADC_GetValue(Pins::ADC_H));
+    HAL_ADC_Stop(Pins::ADC_H);
 
     return true;
 }

@@ -1,7 +1,7 @@
 #pragma once
 #include "main.h"      // CubeMX: GPIO label defines (XXX_Pin / XXX_GPIO_Port)
-#include "tim.h"      // htim2 (PWM), htim3/htim4 (encoders), htim9 (loop)
-#include "adc.h"       // hadc1
+#include "tim.h"      // htim2 (PWM), htim3/htim4 (encoders), htim6 (1 kHz loop on G4)
+#include "adc.h"       // hadc2 (all analog moved to ADC2 for the 48-pin G431)
 #include "spi.h"       // hspi1
 #include "usart.h"     // huart1 (link), huart2 (debug console)
 #include <cstdint>
@@ -32,9 +32,9 @@ namespace Pins
     inline const GpioPin            IMU_CS  = { IMU_CS_GPIO_Port,  IMU_CS_Pin  };
     inline const GpioPin            IMU_INT = { IMU_INT_GPIO_Port, IMU_INT_Pin };
 
-    inline ADC_HandleTypeDef *const ADC1_H  = &hadc1;
-    inline const uint32_t           CLIFF_CH = ADC_CHANNEL_11;
-    inline const uint32_t           VBAT_CH  = ADC_CHANNEL_15;
+    inline ADC_HandleTypeDef *const ADC_H     = &hadc2;
+    inline const uint32_t           CLIFF_CH  = ADC_CHANNEL_17;   // G431: PA4
+    inline const uint32_t           VBAT_CH   = ADC_CHANNEL_15;   // G431: PB15
 
     inline UART_HandleTypeDef *const LINK_UART  = &huart1;
     inline UART_HandleTypeDef *const DEBUG_UART = &huart2;

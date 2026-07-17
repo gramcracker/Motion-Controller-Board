@@ -3,7 +3,7 @@
 #include <cstdint>
 
 #define CONTROL_RATE_HZ             1000
-#define CONTROL_LOOP_TIM            TIM10
+#define CONTROL_LOOP_TIM            TIM6
 
 #define WHEEL_DIAMETER_MM           34
 #define ENCODER_PPR                 7
