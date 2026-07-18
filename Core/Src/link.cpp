@@ -3,7 +3,7 @@
 #include "pins.h"
 #include "globals.h"
 #include "logger.h"
-#include "stm32f4xx_hal.h"
+#include "stm32g4xx_hal.h"
 
 static uint8_t s_rxDma[LINK_RX_DMA_LEN] = {0};
 static Link   *s_pActiveLink = nullptr;

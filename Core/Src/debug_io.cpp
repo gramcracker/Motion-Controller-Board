@@ -1,7 +1,7 @@
 #include "debug_io.h"
 #include "logger.h"
 #include "main.h"
-#include "stm32f4xx_hal.h"
+#include "stm32g4xx_hal.h"
 
 bool debugPrompt(const char *p_message)
 {

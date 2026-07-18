@@ -5,7 +5,7 @@
 #include "globals.h"
 #include "pins.h"
 #include "logger.h"
-#include "stm32f4xx_hal.h"
+#include "stm32g4xx_hal.h"
 
 Controller gController;
 
